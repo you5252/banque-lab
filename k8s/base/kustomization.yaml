@@ -1,0 +1,22 @@
+# Appliquer :  kubectl apply -k k8s/base -n banque-dev
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - postgres.yaml
+  - account-service.yaml
+
+configMapGenerator:
+  - name: postgres-init
+    files:
+      - 00-create-databases.sql=postgres-init.sql
+
+# ⚠️ Pour apprendre uniquement. En entreprise : Vault, Sealed Secrets ou External Secrets.
+secretGenerator:
+  - name: db-credentials
+    literals:
+      - username=banque
+      - password=banque
+
+generatorOptions:
+  disableNameSuffixHash: true

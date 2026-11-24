@@ -1,0 +1,110 @@
+// =====================================================================
+//  PIPELINE CI (Intégration Continue)
+//  Rôle : à chaque push / Pull Request → compiler, tester, construire les images Docker.
+//  Sur la branche main uniquement : pousser les images et déclencher la CD.
+//
+//  Pré-requis Jenkins (tâche S7-1/S7-2) :
+//   - Outils déclarés : JDK "jdk21", Maven "maven3"
+//   - Credentials : "dockerhub" (username/password)
+//   - Job multibranch "banque-lab-ci" pointant sur ce fichier (ci/Jenkinsfile.ci)
+// =====================================================================
+pipeline {
+    agent any
+
+    tools {
+        jdk 'jdk21'
+        maven 'maven3'
+    }
+
+    environment {
+        REGISTRY = 'docker.io/TON_COMPTE_DOCKERHUB'   // ← à remplacer
+    }
+
+    options {
+        timestamps()
+        timeout(time: 30, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+    }
+
+    stages {
+        stage('Préparation') {
+            steps {
+                script {
+                    env.IMAGE_TAG = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+                }
+                echo "Version construite : ${env.IMAGE_TAG}"
+            }
+        }
+
+        stage('Build & tests') {
+            parallel {
+                stage('account-service') {
+                    steps {
+                        dir('services/account-service') {
+                            sh 'mvn -B clean verify'
+                        }
+                    }
+                    post {
+                        always {
+                            junit 'services/account-service/target/surefire-reports/*.xml'
+                            archiveArtifacts artifacts: 'services/account-service/target/cucumber-report.html',
+                                             allowEmptyArchive: true
+                        }
+                    }
+                }
+                stage('batch-service') {
+                    steps {
+                        dir('services/batch-service') {
+                            sh 'mvn -B clean verify'
+                        }
+                    }
+                    post {
+                        always {
+                            junit 'services/batch-service/target/surefire-reports/*.xml'
+                        }
+                    }
+                }
+            }
+        }
+
+        // Tâche S7-5 : ajouter ici un stage SonarQube + "Quality Gate"
+        // Tâche S7-3 (testeuse) : ajouter ici un stage "Tests Playwright"
+
+        stage('Images Docker') {
+            when { branch 'main' }
+            steps {
+                sh "docker build -t ${REGISTRY}/account-service:${IMAGE_TAG} services/account-service"
+                sh "docker build -t ${REGISTRY}/batch-service:${IMAGE_TAG} services/batch-service"
+            }
+        }
+
+        stage('Push des images') {
+            when { branch 'main' }
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'dockerhub',
+                                                  usernameVariable: 'DOCKER_USER',
+                                                  passwordVariable: 'DOCKER_PASS')]) {
+                    // Guillemets simples : le mot de passe n'est jamais interpolé par Groovy ni affiché
+                    sh 'echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin'
+                    sh "docker push ${REGISTRY}/account-service:${IMAGE_TAG}"
+                    sh "docker push ${REGISTRY}/batch-service:${IMAGE_TAG}"
+                }
+            }
+        }
+
+        stage('Déclencher la CD (dev)') {
+            when { branch 'main' }
+            steps {
+                build job: 'banque-lab-cd', wait: false, parameters: [
+                    string(name: 'IMAGE_TAG', value: env.IMAGE_TAG),
+                    string(name: 'TARGET_ENV', value: 'dev')
+                ]
+            }
+        }
+    }
+
+    post {
+        failure { echo '❌ La CI a échoué : regarde le premier stage en rouge.' }
+        success { echo '✅ CI verte.' }
+    }
+}

@@ -1,0 +1,88 @@
+// =====================================================================
+//  PIPELINE CD (Déploiement Continu)
+//  Rôle : déployer une version (tag d'image) déjà construite par la CI sur Kubernetes.
+//  dev → automatique ; recette → manuel ; prod → manuel + validation humaine.
+//
+//  Pré-requis Jenkins (tâche S8-4) :
+//   - Credential de type "Secret file" nommé "kubeconfig"
+//   - kubectl installé sur l'agent Jenkins
+//   - Job pipeline "banque-lab-cd" pointant sur ce fichier (ci/Jenkinsfile.cd)
+// =====================================================================
+pipeline {
+    agent any
+
+    parameters {
+        string(name: 'IMAGE_TAG', defaultValue: '', description: 'Tag de l\'image à déployer (sha git court)')
+        choice(name: 'TARGET_ENV', choices: ['dev', 'recette', 'prod'], description: 'Environnement cible')
+    }
+
+    environment {
+        REGISTRY  = 'docker.io/TON_COMPTE_DOCKERHUB'   // ← à remplacer
+        NAMESPACE = "banque-${params.TARGET_ENV}"
+    }
+
+    options {
+        timestamps()
+        disableConcurrentBuilds()   // jamais deux déploiements en même temps
+    }
+
+    stages {
+        stage('Vérifications') {
+            steps {
+                script {
+                    if (!params.IMAGE_TAG?.trim()) {
+                        error 'IMAGE_TAG est obligatoire'
+                    }
+                }
+                echo "Déploiement de ${params.IMAGE_TAG} sur ${NAMESPACE}"
+            }
+        }
+
+        stage('Validation PROD') {
+            when { expression { params.TARGET_ENV == 'prod' } }
+            steps {
+                timeout(time: 30, unit: 'MINUTES') {
+                    input message: "Déployer ${params.IMAGE_TAG} en PRODUCTION ?", ok: 'Oui, déployer'
+                }
+            }
+        }
+
+        stage('Déploiement Kubernetes') {
+            steps {
+                withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
+                    sh '''
+                        kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+                        kubectl apply -k k8s/base -n "$NAMESPACE"
+                        kubectl -n "$NAMESPACE" set image deployment/account-service \
+                            account-service="$REGISTRY/account-service:$IMAGE_TAG"
+                        kubectl -n "$NAMESPACE" rollout status deployment/account-service --timeout=180s
+                    '''
+                }
+            }
+        }
+
+        stage('Smoke test') {
+            steps {
+                withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
+                    sh '''
+                        kubectl -n "$NAMESPACE" run "smoke-$BUILD_NUMBER" --rm -i --restart=Never \
+                            --image=curlimages/curl -- \
+                            curl -fsS http://account-service:8081/actuator/health/readiness
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        failure {
+            echo '❌ Échec : retour à la version précédente'
+            withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
+                sh 'kubectl -n "$NAMESPACE" rollout undo deployment/account-service || true'
+            }
+        }
+        success {
+            echo "✅ ${params.IMAGE_TAG} déployé sur ${NAMESPACE}"
+        }
+    }
+}

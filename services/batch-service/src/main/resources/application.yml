@@ -1,0 +1,16 @@
+spring:
+  application:
+    name: batch-service
+  main:
+    web-application-type: none     # pas de serveur web : le programme s'arrête à la fin du job
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:banque_batch}
+    username: ${DB_USER:banque}
+    password: ${DB_PASSWORD:banque}
+  batch:
+    jdbc:
+      initialize-schema: always    # crée les tables techniques BATCH_JOB_INSTANCE, BATCH_STEP_EXECUTION...
+    job:
+      enabled: true                # lance le job au démarrage
+  flyway:
+    enabled: true

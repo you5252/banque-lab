@@ -1,0 +1,51 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: account-service
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:banque_account}
+    username: ${DB_USER:banque}
+    password: ${DB_PASSWORD:banque}
+    hikari:
+      maximum-pool-size: 10        # tâche S2-4 : à mesurer sous charge
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate           # le schéma est géré par Flyway, Hibernate vérifie seulement
+    properties:
+      hibernate.jdbc.batch_size: 50
+  flyway:
+    enabled: true
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      acks: all                    # le message est confirmé quand toutes les répliques l'ont
+      properties:
+        enable.idempotence: true   # pas de doublon en cas de ré-essai réseau
+        spring.json.add.type.headers: false
+  threads:
+    virtual:
+      enabled: false               # tâche S3-4 : passer à true et mesurer
+
+banquelab:
+  kafka:
+    topics:
+      transfers: bank.transfers.v1
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true              # /actuator/health/liveness et /readiness pour Kubernetes
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html

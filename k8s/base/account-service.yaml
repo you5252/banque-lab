@@ -1,0 +1,67 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: account-service-config
+data:
+  DB_HOST: postgres
+  DB_NAME: banque_account
+  KAFKA_BOOTSTRAP: banque-kafka-kafka-bootstrap:9092   # nom du service créé par Strimzi (tâche S8-3)
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: account-service
+  labels:
+    app: account-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: account-service
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0      # on ne coupe jamais le service pendant un déploiement
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: account-service
+    spec:
+      containers:
+        - name: account-service
+          image: docker.io/TON_COMPTE_DOCKERHUB/account-service:latest   # remplacé par la CD
+          ports:
+            - containerPort: 8081
+          envFrom:
+            - configMapRef:
+                name: account-service-config
+          env:
+            - name: DB_USER
+              valueFrom: { secretKeyRef: { name: db-credentials, key: username } }
+            - name: DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: db-credentials, key: password } }
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+            limits:   { cpu: "1",  memory: 768Mi }
+          startupProbe:          # laisse le temps à Spring Boot de démarrer
+            httpGet: { path: /actuator/health/liveness, port: 8081 }
+            failureThreshold: 30
+            periodSeconds: 5
+          livenessProbe:         # "est-ce que l'appli est vivante ?" sinon Kubernetes la redémarre
+            httpGet: { path: /actuator/health/liveness, port: 8081 }
+            periodSeconds: 10
+          readinessProbe:        # "est-ce qu'elle peut recevoir du trafic ?"
+            httpGet: { path: /actuator/health/readiness, port: 8081 }
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: account-service
+spec:
+  selector:
+    app: account-service
+  ports:
+    - port: 8081
+      targetPort: 8081

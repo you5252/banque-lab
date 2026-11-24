@@ -1,0 +1,9 @@
+# Profil "test" : base H2 en mémoire en mode compatible PostgreSQL, pas besoin de Docker.
+spring:
+  datasource:
+    url: jdbc:h2:mem:account;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+  kafka:
+    bootstrap-servers: localhost:9999   # jamais utilisé : le port Kafka est remplacé par un mock
