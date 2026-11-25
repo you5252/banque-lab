@@ -1,0 +1,106 @@
+# =====================================================================
+#  Jenkins Configuration as Code (JCasC)
+#  Toute la configuration de Jenkins est ici : rien à cliquer à l'installation.
+#  Les ${VARIABLES} sont fournies par la VM au démarrage (infra/gcp/jenkins-startup.sh).
+#  Seule action manuelle : ajouter le credential "github" (token GitHub), voir le guide.
+# =====================================================================
+jenkins:
+  systemMessage: "BanqueLab · CI (banque-lab-ci) et CD (banque-lab-cd) vers GKE"
+  numExecutors: 2
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: admin
+          name: Administrateur
+          password: ${JENKINS_ADMIN_PASSWORD}
+  authorizationStrategy:
+    loggedInUsersCanDoAnything:
+      allowAnonymousRead: false
+  # Variables disponibles dans tous les pipelines (env.REGISTRY, env.GKE_CLUSTER...)
+  globalNodeProperties:
+    - envVars:
+        env:
+          - key: GCP_PROJECT
+            value: ${GCP_PROJECT}
+          - key: GKE_CLUSTER
+            value: ${GKE_CLUSTER}
+          - key: GKE_ZONE
+            value: ${GKE_ZONE}
+          - key: REGISTRY
+            value: ${REGISTRY}
+
+unclassified:
+  location:
+    url: ${JENKINS_URL}
+
+# Outils utilisés par "tools { jdk 'jdk21'; maven 'maven3' }" dans les Jenkinsfiles
+tool:
+  jdk:
+    installations:
+      - name: jdk21
+        home: /opt/java/openjdk
+  maven:
+    installations:
+      - name: maven3
+        properties:
+          - installSource:
+              installers:
+                - maven:
+                    id: "3.9.9"
+
+# Création des deux jobs (plugin Job DSL)
+jobs:
+  - script: |
+      multibranchPipelineJob('banque-lab-ci') {
+        displayName('banque-lab-ci · build + tests + images')
+        description('CI : chaque branche est compilée et testée. Sur main : images Docker poussées puis déploiement automatique en dev.')
+        branchSources {
+          branchSource {
+            source {
+              git {
+                id('banque-lab')
+                remote('${GITHUB_REPO}')
+                credentialsId('github')
+                traits { gitBranchDiscovery() }
+              }
+            }
+          }
+        }
+        factory {
+          workflowBranchProjectFactory { scriptPath('ci/Jenkinsfile.ci') }
+        }
+        triggers {
+          periodicFolderTrigger { interval('5m') }   // regarde GitHub toutes les 5 min (pas de webhook à exposer)
+        }
+        orphanedItemStrategy {
+          discardOldItems { numToKeep(10) }
+        }
+      }
+  - script: |
+      pipelineJob('banque-lab-cd') {
+        displayName('banque-lab-cd · déploiement')
+        description('CD : déploie une image déjà construite par la CI dans dev, recette ou prod.')
+        parameters {
+          stringParam('IMAGE_TAG', '', "Tag de l'image à déployer (sha git court, visible dans la CI)")
+          choiceParam('TARGET_ENV', ['dev', 'recette', 'prod'], 'Environnement cible')
+        }
+        properties {
+          disableConcurrentBuilds()
+        }
+        definition {
+          cpsScm {
+            scm {
+              git {
+                remote {
+                  url('${GITHUB_REPO}')
+                  credentials('github')
+                }
+                branch('*/main')
+              }
+            }
+            scriptPath('ci/Jenkinsfile.cd')
+            lightweight(true)
+          }
+        }
+      }

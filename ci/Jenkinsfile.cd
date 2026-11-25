@@ -1,12 +1,14 @@
 // =====================================================================
 //  PIPELINE CD (Déploiement Continu)
-//  Rôle : déployer une version (tag d'image) déjà construite par la CI sur Kubernetes.
-//  dev → automatique ; recette → manuel ; prod → manuel + validation humaine.
+//  Rôle : déployer une version (tag d'image) déjà construite par la CI sur Kubernetes (GKE).
+//  dev → automatique après chaque merge sur main
+//  recette → manuel ("Build with Parameters")
+//  prod → manuel + validation humaine
+//  En cas d'échec (pods qui ne démarrent pas, smoke test KO) → retour automatique à la version précédente.
 //
-//  Pré-requis Jenkins (tâche S8-4) :
-//   - Credential de type "Secret file" nommé "kubeconfig"
-//   - kubectl installé sur l'agent Jenkins
-//   - Job pipeline "banque-lab-cd" pointant sur ce fichier (ci/Jenkinsfile.cd)
+//  Pré-configuré par infra/jenkins/casc.yaml : job "banque-lab-cd" et ses paramètres,
+//  variables GCP_PROJECT, GKE_CLUSTER, GKE_ZONE, REGISTRY.
+//  Pas de kubeconfig à stocker : la VM Jenkins se connecte au cluster avec son compte de service Google.
 // =====================================================================
 pipeline {
     agent any
@@ -17,8 +19,10 @@ pipeline {
     }
 
     environment {
-        REGISTRY  = 'docker.io/TON_COMPTE_DOCKERHUB'   // ← à remplacer
-        NAMESPACE = "banque-${params.TARGET_ENV}"
+        NAMESPACE  = "banque-${params.TARGET_ENV}"
+        TARGET_ENV = "${params.TARGET_ENV}"
+        IMAGE_TAG  = "${params.IMAGE_TAG}"
+        KUBECONFIG = "${WORKSPACE}/.kube/config"   // fichier de connexion au cluster, propre à ce job
     }
 
     options {
@@ -34,6 +38,8 @@ pipeline {
                         error 'IMAGE_TAG est obligatoire'
                     }
                 }
+                // L'image existe-t-elle vraiment ? (évite de déployer un tag mal recopié)
+                sh 'gcloud artifacts docker images describe "$REGISTRY/account-service:$IMAGE_TAG" --format="value(image_summary.digest)"'
                 echo "Déploiement de ${params.IMAGE_TAG} sur ${NAMESPACE}"
             }
         }
@@ -47,29 +53,46 @@ pipeline {
             }
         }
 
+        stage('Connexion au cluster') {
+            steps {
+                sh 'gcloud container clusters get-credentials "$GKE_CLUSTER" --zone "$GKE_ZONE" --project "$GCP_PROJECT"'
+                sh 'kubectl get nodes'
+            }
+        }
+
         stage('Déploiement Kubernetes') {
             steps {
-                withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
-                    sh '''
-                        kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
-                        kubectl apply -k k8s/base -n "$NAMESPACE"
-                        kubectl -n "$NAMESPACE" set image deployment/account-service \
-                            account-service="$REGISTRY/account-service:$IMAGE_TAG"
-                        kubectl -n "$NAMESPACE" rollout status deployment/account-service --timeout=180s
-                    '''
-                }
+                sh '''
+                    # Kafka est partagé par tous les environnements (namespace banque-kafka)
+                    kubectl apply -f k8s/platform/
+
+                    kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+
+                    # Kustomize : on part de l'overlay de l'environnement et on fixe la version de l'image
+                    mkdir -p .deploy
+                    cat > .deploy/kustomization.yaml <<EOF
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../k8s/overlays/${TARGET_ENV}
+images:
+  - name: account-service
+    newName: ${REGISTRY}/account-service
+    newTag: "${IMAGE_TAG}"
+EOF
+                    kubectl apply -k .deploy
+                    kubectl -n "$NAMESPACE" rollout status deployment/account-service --timeout=300s
+                '''
             }
         }
 
         stage('Smoke test') {
             steps {
-                withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
-                    sh '''
-                        kubectl -n "$NAMESPACE" run "smoke-$BUILD_NUMBER" --rm -i --restart=Never \
-                            --image=curlimages/curl -- \
-                            curl -fsS http://account-service:8081/actuator/health/readiness
-                    '''
-                }
+                sh '''
+                    kubectl -n "$NAMESPACE" run "smoke-$BUILD_NUMBER" --rm -i --restart=Never \
+                        --image=curlimages/curl -- \
+                        curl -fsS http://account-service:8081/actuator/health/readiness
+                '''
             }
         }
     }
@@ -77,12 +100,11 @@ pipeline {
     post {
         failure {
             echo '❌ Échec : retour à la version précédente'
-            withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
-                sh 'kubectl -n "$NAMESPACE" rollout undo deployment/account-service || true'
-            }
+            sh 'kubectl -n "$NAMESPACE" rollout undo deployment/account-service || true'
         }
         success {
             echo "✅ ${params.IMAGE_TAG} déployé sur ${NAMESPACE}"
+            sh 'kubectl -n "$NAMESPACE" get pods -o wide'
         }
     }
 }

@@ -1,0 +1,7 @@
+# Environnement prod : 2 instances (valeur de base) pour ne jamais couper le service pendant un déploiement.
+# Déployé par la CD dans le namespace banque-prod, après validation humaine.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: banque-prod
+resources:
+  - ../../base
