@@ -1,12 +1,14 @@
 // =====================================================================
 //  PIPELINE CI (Intégration Continue)
-//  Rôle : à chaque push / Pull Request → compiler, tester, construire les images Docker.
-//  Sur la branche main uniquement : pousser les images et déclencher la CD.
+//  Rôle : à chaque push sur n'importe quelle branche → compiler, tester.
+//  Sur la branche main uniquement : construire les images Docker, les pousser
+//  dans Artifact Registry (Google Cloud) et déclencher la CD vers l'environnement dev.
 //
-//  Pré-requis Jenkins (tâche S7-1/S7-2) :
-//   - Outils déclarés : JDK "jdk21", Maven "maven3"
-//   - Credentials : "dockerhub" (username/password)
-//   - Job multibranch "banque-lab-ci" pointant sur ce fichier (ci/Jenkinsfile.ci)
+//  Tout est pré-configuré par infra/jenkins/casc.yaml :
+//   - outils JDK "jdk21" et Maven "maven3"
+//   - variable REGISTRY (adresse du dépôt d'images Artifact Registry)
+//   - job multibranch "banque-lab-ci" qui lit ce fichier
+//  Pas de mot de passe Docker : la VM Jenkins s'authentifie avec son compte de service Google.
 // =====================================================================
 pipeline {
     agent any
@@ -14,10 +16,6 @@ pipeline {
     tools {
         jdk 'jdk21'
         maven 'maven3'
-    }
-
-    environment {
-        REGISTRY = 'docker.io/TON_COMPTE_DOCKERHUB'   // ← à remplacer
     }
 
     options {
@@ -73,21 +71,23 @@ pipeline {
         stage('Images Docker') {
             when { branch 'main' }
             steps {
-                sh "docker build -t ${REGISTRY}/account-service:${IMAGE_TAG} services/account-service"
-                sh "docker build -t ${REGISTRY}/batch-service:${IMAGE_TAG} services/batch-service"
+                sh 'docker build -t "$REGISTRY/account-service:$IMAGE_TAG" services/account-service'
+                sh 'docker build -t "$REGISTRY/batch-service:$IMAGE_TAG" services/batch-service'
             }
         }
 
         stage('Push des images') {
             when { branch 'main' }
             steps {
-                withCredentials([usernamePassword(credentialsId: 'dockerhub',
-                                                  usernameVariable: 'DOCKER_USER',
-                                                  passwordVariable: 'DOCKER_PASS')]) {
-                    // Guillemets simples : le mot de passe n'est jamais interpolé par Groovy ni affiché
-                    sh 'echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin'
-                    sh "docker push ${REGISTRY}/account-service:${IMAGE_TAG}"
-                    sh "docker push ${REGISTRY}/batch-service:${IMAGE_TAG}"
+                // Configure Docker pour utiliser les identifiants Google de la VM (aucun secret stocké dans Jenkins)
+                sh 'gcloud auth configure-docker "${REGISTRY%%/*}" --quiet'
+                sh 'docker push "$REGISTRY/account-service:$IMAGE_TAG"'
+                sh 'docker push "$REGISTRY/batch-service:$IMAGE_TAG"'
+            }
+            post {
+                always {
+                    // Les images sont dans Artifact Registry : inutile de les garder sur le disque de la VM
+                    sh 'docker rmi "$REGISTRY/account-service:$IMAGE_TAG" "$REGISTRY/batch-service:$IMAGE_TAG" || true'
                 }
             }
         }
@@ -105,6 +105,6 @@ pipeline {
 
     post {
         failure { echo '❌ La CI a échoué : regarde le premier stage en rouge.' }
-        success { echo '✅ CI verte.' }
+        success { echo "✅ CI verte. Image ${env.IMAGE_TAG} prête à être déployée." }
     }
 }

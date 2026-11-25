@@ -5,7 +5,8 @@ metadata:
 data:
   DB_HOST: postgres
   DB_NAME: banque_account
-  KAFKA_BOOTSTRAP: banque-kafka-kafka-bootstrap:9092   # nom du service créé par Strimzi (tâche S8-3)
+  # Kafka partagé (k8s/platform/kafka.yaml). Tâche S8-3 : remplacer par Strimzi → banque-kafka-kafka-bootstrap:9092
+  KAFKA_BOOTSTRAP: kafka.banque-kafka.svc.cluster.local:9092
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -30,7 +31,7 @@ spec:
     spec:
       containers:
         - name: account-service
-          image: docker.io/TON_COMPTE_DOCKERHUB/account-service:latest   # remplacé par la CD
+          image: account-service   # nom logique : la CD le remplace par l'image Artifact Registry + tag (Kustomize "images")
           ports:
             - containerPort: 8081
           envFrom:

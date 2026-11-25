@@ -1,0 +1,18 @@
+# Environnement dev : 1 seule instance et moins de CPU réservé (le cluster est petit).
+# Déployé par la CD dans le namespace banque-dev.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: banque-dev
+resources:
+  - ../../base
+patches:
+  - target:
+      kind: Deployment
+      name: account-service
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: 100m
