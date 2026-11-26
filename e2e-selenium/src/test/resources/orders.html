@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Commandes (maquette de test)</title>
+</head>
+<body>
+  <h1>Commandes</h1>
+  <input data-testid="orders-search" placeholder="Rechercher un client">
+
+  <table>
+    <thead><tr><th>N°</th><th>Client</th><th>Montant</th></tr></thead>
+    <tbody>
+      <tr data-testid="order-row"><td>1001</td><td>Dupont</td><td>120,00 €</td></tr>
+      <tr data-testid="order-row"><td>1002</td><td>Martin</td><td>89,90 €</td></tr>
+      <tr data-testid="order-row"><td>1003</td><td>Dupont</td><td>45,50 €</td></tr>
+    </tbody>
+  </table>
+
+  <p data-testid="orders-empty" style="display:none">Aucun résultat</p>
+
+  <script>
+    // Filtre les lignes à chaque frappe, comme le ferait l'appli Angular
+    const input = document.querySelector('[data-testid="orders-search"]');
+    const rows  = [...document.querySelectorAll('tbody tr')];
+    const empty = document.querySelector('[data-testid="orders-empty"]');
+
+    input.addEventListener('input', () => {
+      const q = input.value.trim().toLowerCase();
+      let visible = 0;
+      rows.forEach(r => {
+        const match = r.cells[1].textContent.toLowerCase().includes(q);
+        r.style.display = match ? '' : 'none';
+        if (match) {
+          r.setAttribute('data-testid', 'order-row');
+          visible++;
+        } else {
+          r.removeAttribute('data-testid');
+        }
+      });
+      empty.style.display = visible === 0 ? '' : 'none';
+    });
+  </script>
+</body>
+</html>
